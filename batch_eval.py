@@ -1,90 +1,118 @@
-from speechmetrics import load
+from eval import evaluate_audio_metrics
 import os
-from pathlib import Path
 import numpy as np
 import matplotlib.pyplot as plt
 import pandas as pd
 
-# config
-use_pesq = False  # 
 
-# load metrics
-metric_list = ['mosnet', 'stoi', 'sisdr']
-if use_pesq:
-    metric_list.append('pesq')
-metrics = load(metric_list, window=None)
-
-# folders
-generated_dir = 'audio/clean_testset_wav'
-ground_truth_dir = 'audio/noisy_testset_wav'
-
-# get matching files
-gen_files = sorted([f for f in os.listdir(generated_dir) if f.endswith('.wav')])
-results = {metric: [] for metric in metric_list}
-filenames = []
-
-print("evaluating files...")
-for filename in gen_files:
-    gen_path = os.path.join(generated_dir, filename)
-    gt_path = os.path.join(ground_truth_dir, filename)
+def get_matching_audio_files(generated_dir, ground_truth_dir):
+    generated_files = sorted([f for f in os.listdir(generated_dir) if f.endswith('.wav')])
+    matching_files = []
     
-    if os.path.exists(gt_path):
-        scores = metrics(gen_path, gt_path)
+    for filename in generated_files:
+        generated_path = os.path.join(generated_dir, filename)
+        ground_truth_path = os.path.join(ground_truth_dir, filename)
+        
+        if os.path.exists(ground_truth_path):
+            matching_files.append({
+                'filename': filename,
+                'generated_path': generated_path,
+                'ground_truth_path': ground_truth_path
+            })
+    
+    return matching_files
+
+
+def evaluate_batch_files(matching_files):
+    results = []
+    filenames = []
+    
+    print("evaluating files...")
+    for file_info in matching_files:
+        filename = file_info['filename']
+        generated_path = file_info['generated_path']
+        ground_truth_path = file_info['ground_truth_path']
+        
+        scores = evaluate_audio_metrics(generated_path, ground_truth_path)
         filenames.append(filename)
-        for metric_name, score in scores.items():
-            # extract scalar
-            if hasattr(score, 'item'):
-                score = score.item()
-            elif isinstance(score, (list, np.ndarray)):
-                score = float(np.mean(score))
-            results[metric_name].append(score)
+        results.append(scores)
+    
+    print(f"evaluated {len(filenames)} files")
+    
+    return filenames, results
 
-print(f"evaluated {len(filenames)} files")
 
-# create dataframe
-df = pd.DataFrame(results, index=filenames)
-print("\nsummary statistics:")
-print(df.describe())
+def create_results_dataframe(filenames, results):
+    dataframe = pd.DataFrame(results, index=filenames)
+    return dataframe
 
-# plotting
-fig, axes = plt.subplots(2, 2, figsize=(12, 10))
 
-# boxplot
-ax = axes[0, 0]
-df.boxplot(ax=ax)
-ax.set_title('metric distributions')
-ax.set_ylabel('score')
+def print_summary_statistics(dataframe):
+    print("\nsummary statistics:")
+    print("=" * 50)
+    print(dataframe.describe())
 
-# mean scores
-ax = axes[0, 1]
-means = df.mean()
-ax.bar(means.index, means.values)
-ax.set_title('average scores')
-ax.set_ylabel('mean score')
-ax.set_ylim([0, max(means.values) * 1.2])
 
-# score trends
-ax = axes[1, 0]
-for col in df.columns:
-    ax.plot(df[col], label=col, alpha=0.7)
-ax.set_title('score per file')
-ax.set_xlabel('file index')
-ax.set_ylabel('score')
-ax.legend()
+def generate_evaluation_plots(dataframe, output_path='evaluation_report.png'):
+    fig, axes = plt.subplots(2, 2, figsize=(12, 10))
+    
+    # boxplot
+    ax = axes[0, 0]
+    dataframe.boxplot(ax=ax)
+    ax.set_title('metric distributions')
+    ax.set_ylabel('score')
+    
+    # mean scores
+    ax = axes[0, 1]
+    means = dataframe.mean()
+    ax.bar(means.index, means.values)
+    ax.set_title('average scores')
+    ax.set_ylabel('mean score')
+    ax.set_ylim([0, max(means.values) * 1.2])
+    
+    # score trends
+    ax = axes[1, 0]
+    for col in dataframe.columns:
+        ax.plot(dataframe[col], label=col, alpha=0.7)
+    ax.set_title('score per file')
+    ax.set_xlabel('file index')
+    ax.set_ylabel('score')
+    ax.legend()
+    
+    # histogram
+    ax = axes[1, 1]
+    dataframe.hist(bins=20, ax=ax, alpha=0.7)
+    ax.set_title('score histograms')
+    ax.set_xlabel('score')
+    ax.set_ylabel('frequency')
+    
+    plt.tight_layout()
+    plt.savefig(output_path, dpi=300)
+    print(f"\nsaved: {output_path}")
 
-# histogram
-ax = axes[1, 1]
-df.hist(bins=20, ax=ax, alpha=0.7)
-ax.set_title('score histograms')
-ax.set_xlabel('score')
-ax.set_ylabel('frequency')
 
-plt.tight_layout()
-plt.savefig('evaluation_report.png', dpi=300)
-print("\nsaved: evaluation_report.png")
+def save_results_csv(dataframe, output_path='evaluation_results.csv'):
+    dataframe.to_csv(output_path)
+    print(f"saved: {output_path}")
 
-# save csv
-df.to_csv('evaluation_results.csv')
-print("saved: evaluation_results.csv")
 
-plt.show()
+if __name__ == "__main__":
+    import argparse
+    
+    parser = argparse.ArgumentParser(description='batch evaluate audio metrics')
+    parser.add_argument('--generated-dir', '-g', type=str, default='audio/clean')
+    parser.add_argument('--ground-truth-dir', '-gt', type=str, default='audio/noisy')
+    parser.add_argument('--output-plot', '-o', type=str, default='evaluation_report.png')
+    parser.add_argument('--output-csv', '-c', type=str, default='evaluation_results.csv')
+    
+    args = parser.parse_args()
+    
+    matching_files = get_matching_audio_files(args.generated_dir, args.ground_truth_dir)
+    filenames, results = evaluate_batch_files(matching_files)
+    dataframe = create_results_dataframe(filenames, results)
+    
+    print_summary_statistics(dataframe)
+    generate_evaluation_plots(dataframe, args.output_plot)
+    save_results_csv(dataframe, args.output_csv)
+    
+    plt.show()
